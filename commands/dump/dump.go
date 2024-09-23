@@ -3,7 +3,9 @@ package dump
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/cosmoer/bbolt-cli/boltutils"
@@ -36,8 +38,21 @@ var Command = cli.Command{
 			return err
 		}
 
+		// Since Containerd always holds the lock, we cann't acquire it.
+		// A simple workaround is to copy the metadata.db to a temporary file and then read from it.
+		tempDir, err := os.MkdirTemp("", "bbolt-cli")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(tempDir)
+
+		tempSrcPath := filepath.Join(tempDir, filepath.Base(SrcPath))
+		if err = copyFileWithSync(tempSrcPath, SrcPath); err != nil {
+			return err
+		}
+
 		// Open bolt database.
-		src, err := bolt.Open(SrcPath, 0444, nil)
+		src, err := bolt.Open(tempSrcPath, 0444, nil)
 		if err != nil {
 			return err
 		}
@@ -73,4 +88,22 @@ func containerdMetaPrintAll(src *bolt.DB) error {
 		return err
 	}
 	return nil
+}
+
+func copyFileWithSync(target, source string) error {
+
+	src, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("failed to open source %s: %w", source, err)
+	}
+	defer src.Close()
+	tgt, err := os.Create(target)
+	if err != nil {
+		return fmt.Errorf("failed to open target %s: %w", target, err)
+	}
+	defer tgt.Close()
+	defer tgt.Sync()
+
+	_, err = io.Copy(tgt, src)
+	return err
 }
